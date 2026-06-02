@@ -1,4 +1,4 @@
-name: Android14 GKI Kernel 6.1.163 with DroidSpaces
+name: Android14 GKI Kernel 6.1.163 with DroidSpaces (No Patch)
 
 on:
   workflow_dispatch:
@@ -14,7 +14,8 @@ jobs:
       ARCH: arm64
       SUBARCH: arm64
       OUT_DIR: out
-      DEFCONFIG: gki_defconfig
+      # Gunakan defconfig vendor peridot (case sensitive)
+      DEFCONFIG: vendor/Peridot_GKI_defconfig
       # ZyC Clang version
       ZYC_URL: https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260510-release/Clang-16.0.6-20260510.tar.gz
 
@@ -65,7 +66,6 @@ jobs:
           curl -L -o zyc-clang.tar.gz "${{ env.ZYC_URL }}"
           tar -xzf zyc-clang.tar.gz
           rm zyc-clang.tar.gz
-          # Direktori hasil ekstrak biasanya bernama Clang-16.0.6-20260510
           CLANG_DIR=$(ls -d Clang-* | head -n1)
           echo "PATH=$HOME/toolchains/$CLANG_DIR/bin:$PATH" >> $GITHUB_ENV
           echo "CC=$HOME/toolchains/$CLANG_DIR/bin/clang" >> $GITHUB_ENV
@@ -84,26 +84,36 @@ jobs:
           echo "LLVM=1" >> $GITHUB_ENV
           echo "LLVM_IAS=1" >> $GITHUB_ENV
 
-      # ====== REMOVE O3 OPTIMIZATION BLOKS ======
+      # ====== REMOVE O3 OPTIMIZATION BLOKS (i'm sleepy) ======
       - name: Drop CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3 from Makefile
         run: |
-          # Hapus seluruh blok ifdef yang berhubungan dengan O3
+          # Hapus blok ifdef terkait O3
           sed -i '/ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3/,/endif/d' Makefile
-          # Juga hapus baris lain yang secara eksplisit menambah -O3 (jika ada)
+          # Ganti -O3 dengan -O2 jika ada
           sed -i 's/ -O3/ -O2/g' Makefile
 
+      # ====== KERNEL CONFIGURATION ======
+      - name: Generate vendor defconfig
+        run: |
+          mkdir -p ${{ env.OUT_DIR }}
+          # Gunakan defconfig vendor Peridot
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} ${{ env.DEFCONFIG }}
+          # Hapus konfigurasi O3 jika masih ada
+          sed -i '/CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3/d' ${{ env.OUT_DIR }}/.config
+          # Resolve dependensi
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} olddefconfig
 
       # ====== BUILD KERNEL ======
       - name: Build kernel
         id: build
         run: |
+          # LDFLAGS sesuai saran i'm sleepy
           export CLANG_OPT_LDFLAGS=(
             "-Wl,-O3"
             "-Wl,--lto-O3"
             "-Wl,--sort-common"
             "-Wl,--as-needed"
           )
-          # Gabungkan LDFLAGS
           LDFLAGS_COMBINED=$(printf " %s" "${CLANG_OPT_LDFLAGS[@]}")
 
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} -j$(nproc) \
