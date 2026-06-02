@@ -14,8 +14,6 @@ jobs:
       ARCH: arm64
       SUBARCH: arm64
       OUT_DIR: out
-      # Gunakan defconfig vendor peridot (case sensitive)
-      DEFCONFIG: vendor/Peridot_GKI_defconfig
       # ZyC Clang version
       ZYC_URL: https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260510-release/Clang-16.0.6-20260510.tar.gz
 
@@ -93,14 +91,21 @@ jobs:
           sed -i 's/ -O3/ -O2/g' Makefile
 
       # ====== KERNEL CONFIGURATION ======
-      - name: Generate vendor defconfig
+      - name: Generate kernel config with vendor fragment
         run: |
           mkdir -p ${{ env.OUT_DIR }}
-          # Gunakan defconfig vendor Peridot
-          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} ${{ env.DEFCONFIG }}
-          # Hapus konfigurasi O3 jika masih ada
+          # 1. Mulai dengan konfigurasi dasar GKI
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} gki_defconfig
+          # 2. Merge fragment vendor peridot (jika ada)
+          if [ -f arch/arm64/configs/vendor/peridot_GKI.config ]; then
+            scripts/kconfig/merge_config.sh -m -O ${{ env.OUT_DIR }} \
+              ${{ env.OUT_DIR }}/.config arch/arm64/configs/vendor/peridot_GKI.config
+          else
+            echo "Peringatan: Fragment vendor tidak ditemukan, melanjutkan dengan gki_defconfig saja."
+          fi
+          # 3. Hapus konfigurasi O3 jika masih ada
           sed -i '/CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3/d' ${{ env.OUT_DIR }}/.config
-          # Resolve dependensi
+          # 4. Resolve dependensi
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} olddefconfig
 
       # ====== BUILD KERNEL ======
