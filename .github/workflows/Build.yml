@@ -16,7 +16,8 @@ jobs:
       OUT_DIR: out
       DEFCONFIG: gki_defconfig
       LLVM_VERSION: 22.1.2
-      LLVM_URL: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.2/clang+llvm-22.1.2-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+      # URL yang benar untuk LLVM prebuilt Linux x86_64
+      LLVM_URL: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.2/LLVM-22.1.2-Linux-X64.tar.xz
 
     steps:
       # Bersihkan workspace sebelum clone (opsional)
@@ -29,17 +30,15 @@ jobs:
       # ====== CLONE MANUAL ======
       - name: Clone kernel source manually
         run: |
-          # Tentukan branch yang akan di-clone
           if [ "${{ github.event_name }}" = "push" ]; then
             BRANCH="${{ github.ref_name }}"
           else
-            # Untuk workflow_dispatch, gunakan branch default (sesuaikan dengan kebutuhan)
             BRANCH="lineage-23.2"
           fi
           echo "Cloning branch: $BRANCH"
           git clone --depth=1 --branch "$BRANCH" https://github.com/Antaru74/android_kernel_xiaomi_sm8635.git .
           git submodule update --init --recursive --depth=1
-        timeout-minutes: 30   # Waktu maksimal clone 30 menit
+        timeout-minutes: 30
 
       # ====== CLEANUP ======
       - name: Free disk space
@@ -65,9 +64,12 @@ jobs:
           mkdir -p $HOME/toolchains
           cd $HOME/toolchains
           curl -L -o llvm.tar.xz "${{ env.LLVM_URL }}"
+          # Verifikasi file (opsional)
+          file llvm.tar.xz
           tar -xf llvm.tar.xz
           rm llvm.tar.xz
-          LLVM_DIR=$(ls -d clang+llvm-* | head -n1)
+          # Direktori hasil ekstrak biasanya bernama LLVM-22.1.2-Linux-X64
+          LLVM_DIR=$(ls -d LLVM-* | head -n1)
           echo "LLVM_PATH=$HOME/toolchains/$LLVM_DIR/bin" >> $GITHUB_ENV
           echo "PATH=$HOME/toolchains/$LLVM_DIR/bin:$PATH" >> $GITHUB_ENV
 
@@ -94,18 +96,12 @@ jobs:
           patch -p1 < fix_sysvipc.patch
 
       # ====== KERNEL CONFIGURATION ======
-      - name: Generate defconfig + merge vendor configs
+      - name: Generate defconfig + add DroidSpaces configs
         run: |
           mkdir -p ${{ env.OUT_DIR }}
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} ${{ env.DEFCONFIG }}
 
-          # (Opsional) merge vendor config jika ada
-          if [ -f arch/arm64/configs/vendor/pineapple_GKI.config ]; then
-            scripts/kconfig/merge_config.sh -m ${{ env.OUT_DIR }}/.config \
-              arch/arm64/configs/vendor/pineapple_GKI.config
-          fi
-
-          # Tambahkan konfigurasi DroidSpaces
+          # Tambahkan konfigurasi DroidSpaces secara langsung ke .config
           cat << EOF >> ${{ env.OUT_DIR }}/.config
           # DroidSpaces support
           CONFIG_SYSVIPC=y
@@ -125,7 +121,7 @@ jobs:
           CONFIG_TMPFS_XATTR=y
           EOF
 
-          # Resolve dependensi
+          # Resolve dependensi otomatis
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} olddefconfig
 
       # ====== BUILD KERNEL ======
