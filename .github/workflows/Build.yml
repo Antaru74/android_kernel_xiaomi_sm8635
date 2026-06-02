@@ -1,4 +1,4 @@
-name: Android14 GKI Kernel 6.1.57
+name: Android14 GKI Kernel 6.1.163 with DroidSpaces
 
 on:
   workflow_dispatch:
@@ -10,107 +10,56 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     env:
       ARCH: arm64
       SUBARCH: arm64
       OUT_DIR: out
+      # Sesuaikan dengan defconfig perangkat Anda (contoh: peridot_gki_defconfig)
       DEFCONFIG: gki_defconfig
-      CLANG_VERSION: r487747
+      # Versi LLVM yang akan digunakan (22.1.2)
+      LLVM_VERSION: 22.1.2
+      # URL download LLVM prebuilt untuk Linux x86_64 (sesuaikan jika ada versi Ubuntu lain)
+      LLVM_URL: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.2/clang+llvm-22.1.2-x86_64-linux-gnu-ubuntu-18.04.tar.xz
 
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: false
+          submodules: true   # init & update submodules
 
-      # ====== SPACE CHECK & CLEANUP ======
-      - name: Force uninstall KernelSU (safe)
+      # ====== CLEANUP ======
+      - name: Free disk space
         run: |
-          set +e
-          echo "== KernelSU auto-uninstall =="
-          rm -rf drivers/kernelsu
-          if [ -f drivers/Kconfig ]; then
-            sed -i '/kernelsu/d' drivers/Kconfig
-          fi
-          if [ -f drivers/Makefile ]; then
-            sed -i '/kernelsu/d' drivers/Makefile
-          fi
-          if [ -f Makefile ]; then
-            sed -i '/kernelsu/d' Makefile
-          fi
-          find . -type f \( -name "Kconfig" -o -name "Makefile" \) \
-            -exec sed -i '/kernelsu/d' {} +
-          echo "KernelSU uninstall step finished"
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift /usr/lib/jvm
+          sudo apt clean
 
-      - name: Check space before cleanup
-        run: |
-          echo "Free space before cleanup:"
-          df -h
-          sudo chown runner /mnt
-
-      - name: Cleanup
-        run: |
-          docker images
-          sudo rm -rf "/home/work/*" || true
-          sudo rm -rf "/opt/*" || true
-          sudo rm -rf "/usr/share/dotnet" || true
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
-          sudo rm -rf "/usr/local/lib/android" || true
-          sudo rm -rf "/usr/local/share/boost" || true
-          sudo rm -rf "/usr/lib/jvm" || true
-          sudo rm -rf "/usr/share/swift" || true
-          sudo rm -rf "/usr/local/julia*" || true
-          sudo rm -rf "/usr/share/kotlinc" || true
-          sudo rm -rf "/usr/local/share/edge_driver" || true
-          sudo rm -rf "/usr/local/share/chromedriver-linux64" || true
-          sudo rm -rf "/usr/local/share/gecko_driver" || true
-          sudo rm -rf "/usr/share/miniconda" || true
-          sudo rm -rf "/usr/local/share/phantomjs*" || true
-          sudo rm -rf "/usr/share/sbt" || true
-          sudo rm -rf "/usr/local/sqlpackage" || true
-          sudo rm -rf "/usr/bin/yq" || true
-          sudo rm -rf "/usr/local/share/vcpkg" || true
-          sudo rm -rf "/usr/local/bin/"{terraform,stack,aliyun,pulumi,azcopy,bicep,rebar3,packer,docker-compose,minikube,kustomize,kubectl,kind,helm} || true
-          sudo rm -rf "/home/.dotnet" "/etc/skel/.dotnet" "/home/linuxbrew" "/home/.nvm" || true
-          sudo docker image prune -a -f || true
-          rustup self uninstall -y || true
-          sudo apt purge -y \
-            clang* llvm* node* npm* ruby* php* dotnet-sdk* \
-            google-chrome-stable firefox powershell mono-complete \
-            docker-* podman buildah skopeo kubectl \
-            mysql* postgresql* mongodb* nginx apache2 \
-            openjdk-* temurin-* \
-            gcc-* g++-* \
-            linux-headers-* \
-            python3-* \
-            man-db manpages \
-            '*-dev' || true
-          sudo apt-get autoremove -y || true
-          sudo apt-get autoclean -y || true
-          df -h
-
-      # ====== DEPENDENCIES ======
-      - name: Install minimal build dependencies
+      # ====== INSTALL DEPENDENCIES ======
+      - name: Install build dependencies (Ubuntu)
         run: |
           sudo apt update
           sudo apt install -y \
-            bc bison build-essential curl flex git libelf-dev libssl-dev lld python3 unzip zip
+            bc bison build-essential curl flex git libelf-dev libssl-dev \
+            lld python3 unzip zip device-tree-compiler lz4 xz-utils zlib1g-dev \
+            openjdk-17-jdk gcc g++ python-is-python3 p7zip-full \
+            android-sdk-libsparse-utils erofs-utils gnupg gperf \
+            libncurses-dev libx11-dev libreadline-dev libgl1-mesa-dev \
+            make repo cpio kmod openssl libarchive-tools zstd rsync dwarves
 
-      # ====== TOOLCHAIN ======
-      - name: Clone AOSP Clang
+      # ====== TOOLCHAIN: LLVM 22.1.2 ======
+      - name: Setup LLVM ${{ env.LLVM_VERSION }}
         run: |
-          mkdir -p toolchains
-          cd toolchains
-          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            --depth 1 --single-branch -b main
-          CLANG_DIR=$(ls -d linux-x86/clang-r*/bin | sort -V | tail -n 1 | xargs dirname)
-          echo "CLANG_PATH=$PWD/$CLANG_DIR/bin" >> $GITHUB_ENV
+          mkdir -p $HOME/toolchains
+          cd $HOME/toolchains
+          curl -L -o llvm.tar.xz "${{ env.LLVM_URL }}"
+          tar -xf llvm.tar.xz
+          rm llvm.tar.xz
+          LLVM_DIR=$(ls -d clang+llvm-* | head -n1)
+          echo "LLVM_PATH=$HOME/toolchains/$LLVM_DIR/bin" >> $GITHUB_ENV
+          echo "PATH=$HOME/toolchains/$LLVM_DIR/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Setup LLVM environment
+      - name: Set cross-compile environment
         run: |
-          echo "PATH=${CLANG_PATH}:$PATH" >> $GITHUB_ENV
           echo "CC=clang" >> $GITHUB_ENV
           echo "LD=ld.lld" >> $GITHUB_ENV
           echo "AR=llvm-ar" >> $GITHUB_ENV
@@ -118,92 +67,101 @@ jobs:
           echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
           echo "OBJDUMP=llvm-objdump" >> $GITHUB_ENV
           echo "STRIP=llvm-strip" >> $GITHUB_ENV
+          echo "READELF=llvm-readelf" >> $GITHUB_ENV
           echo "LLVM=1" >> $GITHUB_ENV
           echo "LLVM_IAS=1" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
 
-      # ====== APPLY PATCH ======
-      - name: Apply DroidSpaces kernel patch
+      # ====== PATCH ======
+      - name: Apply DroidSpaces kernel patch (sysvipc kabi fix)
         run: |
           curl -L -o fix_sysvipc.patch \
-            https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
+            "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch"
           patch -p1 < fix_sysvipc.patch
 
-      # ====== BUILD ======
-      - name: Kernel defconfig + merge pineapple configs
+      # ====== KERNEL CONFIGURATION ======
+      - name: Generate defconfig + merge vendor configs
         run: |
-          make clean && make mrproper
-          mkdir -p ${OUT_DIR}
-          rm -f .config
-          make O=${OUT_DIR} ARCH=arm64 ${DEFCONFIG}
-          export KCONFIG_CONFIG=out/.config
-          scripts/kconfig/merge_config.sh -m \
-            out/.config \
-            arch/arm64/configs/vendor/pineapple_GKI.config 
-          make O=out ARCH=arm64 olddefconfig
+          mkdir -p ${{ env.OUT_DIR }}
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} ${{ env.DEFCONFIG }}
 
-      - name: Add DroidSpaces kernel configs (echo to defconfig)
-        run: |
-          echo "" >> ${OUT_DIR}/.config
-          echo "# DroidSpaces support" >> ${OUT_DIR}/.config
-          echo "CONFIG_SYSVIPC=y" >> ${OUT_DIR}/.config
-          echo "CONFIG_POSIX_MQUEUE=y" >> ${OUT_DIR}/.config
-          echo "CONFIG_IPC_NS=y" >> ${OUT_DIR}/.config
-          echo "CONFIG_PID_NS=y" >> ${OUT_DIR}/.config
-          echo "CONFIG_DEVTMPFS=y" >> ${OUT_DIR}/.config
-          echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> ${OUT_DIR}/.config
-          make O=${OUT_DIR} ARCH=arm64 olddefconfig
+          # (Opsional) merge vendor config jika ada, misal untuk Snapdragon 8 Gen 3
+          if [ -f arch/arm64/configs/vendor/pineapple_GKI.config ]; then
+            scripts/kconfig/merge_config.sh -m ${{ env.OUT_DIR }}/.config \
+              arch/arm64/configs/vendor/pineapple_GKI.config
+          fi
 
-      # ====== BUILD KERNEL (WITH ERROR LOGGING) ======
-      - name: Build GKI kernel
-        id: kernel_build
+          # Tambahkan konfigurasi DroidSpaces secara langsung ke .config
+          cat << EOF >> ${{ env.OUT_DIR }}/.config
+          # DroidSpaces support
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_PID_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_TARGET_REJECT=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_TMPFS_XATTR=y
+          EOF
+
+          # Resolve dependensi otomatis
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} olddefconfig
+
+      # ====== BUILD KERNEL ======
+      - name: Build kernel
+        id: build
         run: |
-          make O=${OUT_DIR} ARCH=arm64 -j$(nproc) 2>&1 | tee build.log
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} -j$(nproc) \
+            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
+            READELF=llvm-readelf LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            2>&1 | tee build.log
           exit_code=${PIPESTATUS[0]}
           echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
           if [ $exit_code -ne 0 ]; then
             echo "Build failed with exit code $exit_code"
-            # Simpan ringkasan error ke error.txt
-            echo "=== BUILD ERROR SUMMARY ===" > error.txt
-            tail -100 build.log >> error.txt
-            echo "Full log tersedia di build.log" >> error.txt
+            tail -100 build.log > error.txt
           fi
         continue-on-error: true
 
-      # ====== UPLOAD ERROR LOG JIKA GAGAL ======
+      # ====== UPLOAD ERROR LOGS ======
       - name: Upload error logs on failure
-        if: steps.kernel_build.outputs.exit_code != 0
+        if: steps.build.outputs.exit_code != 0
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-build-error-log
+          name: kernel-build-error
           path: |
             build.log
             error.txt
+            ${{ env.OUT_DIR }}/.config
 
-      # ====== UPLOAD KONFIGURASI UNTUK DEBUG (opsional) ======
-      - name: Upload kernel config for debugging (if build fails)
-        if: steps.kernel_build.outputs.exit_code != 0
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-config-debug
-          path: ${OUT_DIR}/.config
-
-      # ====== ARTIFACT (hanya jika build sukses) ======
+      # ====== COLLECT ARTIFACTS ======
       - name: Collect artifacts
-        if: steps.kernel_build.outputs.exit_code == 0
+        if: steps.build.outputs.exit_code == 0
         run: |
           mkdir -p artifacts
-          cp ${OUT_DIR}/arch/arm64/boot/Image artifacts/ || true
-          cp ${OUT_DIR}/arch/arm64/boot/Image.lz4 artifacts/ || true
-          cp ${OUT_DIR}/drivers/regulator/rpmh-regulator.ko artifacts/ || true
-          cp ${OUT_DIR}/drivers/power/supply/qti_battery_charger.ko artifacts/ || true
-          cp ${OUT_DIR}/drivers/thermal/qcom/qcom_tsens.ko artifacts/ || true
-          cp ${OUT_DIR}/drivers/cpufreq/qcom-cpufreq-hw.ko artifacts/ || true
-          cp ${OUT_DIR}/drivers/clk/qcom/clk-qcom.ko artifacts/ || true
-          cp ${OUT_DIR}/drivers/soc/qcom/dcvs/qcom-dcvs.ko artifacts/ || true
+          cp ${{ env.OUT_DIR }}/arch/arm64/boot/Image artifacts/ || true
+          cp ${{ env.OUT_DIR }}/arch/arm64/boot/Image.lz4 artifacts/ || true
+          # Salin modul yang diperlukan (sesuaikan dengan perangkat)
+          cp ${{ env.OUT_DIR }}/drivers/regulator/rpmh-regulator.ko artifacts/ || true
+          cp ${{ env.OUT_DIR }}/drivers/power/supply/qti_battery_charger.ko artifacts/ || true
+          cp ${{ env.OUT_DIR }}/drivers/thermal/qcom/qcom_tsens.ko artifacts/ || true
+          cp ${{ env.OUT_DIR }}/drivers/cpufreq/qcom-cpufreq-hw.ko artifacts/ || true
+          cp ${{ env.OUT_DIR }}/drivers/clk/qcom/clk-qcom.ko artifacts/ || true
+          cp ${{ env.OUT_DIR }}/drivers/soc/qcom/dcvs/qcom-dcvs.ko artifacts/ || true
 
-      - name: Upload artifacts (successful build)
-        if: steps.kernel_build.outputs.exit_code == 0
+      - name: Upload artifacts (success)
+        if: steps.build.outputs.exit_code == 0
         uses: actions/upload-artifact@v4
         with:
-          name: android14-gki-6.1.57
+          name: android14-gki-6.1.163-droidspaces
           path: artifacts
