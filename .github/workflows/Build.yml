@@ -14,19 +14,32 @@ jobs:
       ARCH: arm64
       SUBARCH: arm64
       OUT_DIR: out
-      # Sesuaikan dengan defconfig perangkat Anda (contoh: peridot_gki_defconfig)
       DEFCONFIG: gki_defconfig
-      # Versi LLVM yang akan digunakan (22.1.2)
       LLVM_VERSION: 22.1.2
-      # URL download LLVM prebuilt untuk Linux x86_64 (sesuaikan jika ada versi Ubuntu lain)
       LLVM_URL: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.2/clang+llvm-22.1.2-x86_64-linux-gnu-ubuntu-18.04.tar.xz
 
     steps:
-      - name: Checkout kernel source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: true   # init & update submodules
+      # Bersihkan workspace sebelum clone (opsional)
+      - name: Clean workspace
+        run: |
+          sudo rm -rf ${{ github.workspace }}/*
+          sudo rm -rf ${{ github.workspace }}/.[!.]*
+        continue-on-error: true
+
+      # ====== CLONE MANUAL ======
+      - name: Clone kernel source manually
+        run: |
+          # Tentukan branch yang akan di-clone
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BRANCH="${{ github.ref_name }}"
+          else
+            # Untuk workflow_dispatch, gunakan branch default (sesuaikan dengan kebutuhan)
+            BRANCH="lineage-23.2"
+          fi
+          echo "Cloning branch: $BRANCH"
+          git clone --depth=1 --branch "$BRANCH" https://github.com/Antaru74/android_kernel_xiaomi_sm8635.git .
+          git submodule update --init --recursive --depth=1
+        timeout-minutes: 30   # Waktu maksimal clone 30 menit
 
       # ====== CLEANUP ======
       - name: Free disk space
@@ -86,13 +99,13 @@ jobs:
           mkdir -p ${{ env.OUT_DIR }}
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} ${{ env.DEFCONFIG }}
 
-          # (Opsional) merge vendor config jika ada, misal untuk Snapdragon 8 Gen 3
+          # (Opsional) merge vendor config jika ada
           if [ -f arch/arm64/configs/vendor/pineapple_GKI.config ]; then
             scripts/kconfig/merge_config.sh -m ${{ env.OUT_DIR }}/.config \
               arch/arm64/configs/vendor/pineapple_GKI.config
           fi
 
-          # Tambahkan konfigurasi DroidSpaces secara langsung ke .config
+          # Tambahkan konfigurasi DroidSpaces
           cat << EOF >> ${{ env.OUT_DIR }}/.config
           # DroidSpaces support
           CONFIG_SYSVIPC=y
@@ -112,7 +125,7 @@ jobs:
           CONFIG_TMPFS_XATTR=y
           EOF
 
-          # Resolve dependensi otomatis
+          # Resolve dependensi
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} olddefconfig
 
       # ====== BUILD KERNEL ======
@@ -151,7 +164,6 @@ jobs:
           mkdir -p artifacts
           cp ${{ env.OUT_DIR }}/arch/arm64/boot/Image artifacts/ || true
           cp ${{ env.OUT_DIR }}/arch/arm64/boot/Image.lz4 artifacts/ || true
-          # Salin modul yang diperlukan (sesuaikan dengan perangkat)
           cp ${{ env.OUT_DIR }}/drivers/regulator/rpmh-regulator.ko artifacts/ || true
           cp ${{ env.OUT_DIR }}/drivers/power/supply/qti_battery_charger.ko artifacts/ || true
           cp ${{ env.OUT_DIR }}/drivers/thermal/qcom/qcom_tsens.ko artifacts/ || true
