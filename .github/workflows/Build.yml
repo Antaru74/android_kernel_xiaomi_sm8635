@@ -1,4 +1,4 @@
-name: Android14 GKI Kernel 6.1
+name: Android14 GKI Kernel 6.1.57
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
       ARCH: arm64
       SUBARCH: arm64
       OUT_DIR: out
-      DEFCONFIG: gki_defconfig
+      DEFCONFIG: peridot_gki_defconfig
       CLANG_VERSION: r487747
 
     steps:
@@ -30,24 +30,18 @@ jobs:
         run: |
           set +e
           echo "== KernelSU auto-uninstall =="
-
           rm -rf drivers/kernelsu
-
           if [ -f drivers/Kconfig ]; then
             sed -i '/kernelsu/d' drivers/Kconfig
           fi
-
           if [ -f drivers/Makefile ]; then
             sed -i '/kernelsu/d' drivers/Makefile
           fi
-
           if [ -f Makefile ]; then
             sed -i '/kernelsu/d' Makefile
           fi
-
           find . -type f \( -name "Kconfig" -o -name "Makefile" \) \
             -exec sed -i '/kernelsu/d' {} +
-
           echo "KernelSU uninstall step finished"
 
       - name: Check space before cleanup
@@ -82,7 +76,6 @@ jobs:
           sudo rm -rf "/home/.dotnet" "/etc/skel/.dotnet" "/home/linuxbrew" "/home/.nvm" || true
           sudo docker image prune -a -f || true
           rustup self uninstall -y || true
-
           sudo apt purge -y \
             clang* llvm* node* npm* ruby* php* dotnet-sdk* \
             google-chrome-stable firefox powershell mono-complete \
@@ -94,7 +87,6 @@ jobs:
             python3-* \
             man-db manpages \
             '*-dev' || true
-
           sudo apt-get autoremove -y || true
           sudo apt-get autoclean -y || true
           df -h
@@ -104,30 +96,15 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
-            bc \
-            bison \
-            build-essential \
-            curl \
-            flex \
-            git \
-            libelf-dev \
-            libssl-dev \
-            lld \
-            python3 \
-            unzip \
-            zip
+            bc bison build-essential curl flex git libelf-dev libssl-dev lld python3 unzip zip
 
       # ====== TOOLCHAIN ======
       - name: Clone AOSP Clang
         run: |
           mkdir -p toolchains
           cd toolchains
-
           git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            --depth 1 \
-            --single-branch \
-            -b main
-
+            --depth 1 --single-branch -b main
           CLANG_DIR=$(ls -d linux-x86/clang-r*/bin | sort -V | tail -n 1 | xargs dirname)
           echo "CLANG_PATH=$PWD/$CLANG_DIR/bin" >> $GITHUB_ENV
 
@@ -157,20 +134,13 @@ jobs:
           make clean && make mrproper
           mkdir -p ${OUT_DIR}
           rm -f .config
-
-          # Base defconfig
           make O=${OUT_DIR} ARCH=arm64 ${DEFCONFIG}
-
           export KCONFIG_CONFIG=out/.config
-
-          # Merge vendor configs (Snapdragon 8 Gen 3)
           scripts/kconfig/merge_config.sh -m \
-           out/.config \
-           arch/arm64/configs/vendor/pineapple_GKI.config 
-
+            out/.config \
+            arch/arm64/configs/vendor/pineapple_GKI.config 
           make O=out ARCH=arm64 olddefconfig
 
-      # ====== ADD DROIDSPACES CONFIGS ======
       - name: Add DroidSpaces kernel configs (echo to defconfig)
         run: |
           echo "" >> ${OUT_DIR}/.config
@@ -181,15 +151,45 @@ jobs:
           echo "CONFIG_PID_NS=y" >> ${OUT_DIR}/.config
           echo "CONFIG_DEVTMPFS=y" >> ${OUT_DIR}/.config
           echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> ${OUT_DIR}/.config
-          # Run olddefconfig to resolve any dependencies
           make O=${OUT_DIR} ARCH=arm64 olddefconfig
 
+      # ====== BUILD KERNEL (WITH ERROR LOGGING) ======
       - name: Build GKI kernel
+        id: kernel_build
         run: |
-          make O=${OUT_DIR} ARCH=arm64 -j$(nproc)
+          make O=${OUT_DIR} ARCH=arm64 -j$(nproc) 2>&1 | tee build.log
+          exit_code=${PIPESTATUS[0]}
+          echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
+          if [ $exit_code -ne 0 ]; then
+            echo "Build failed with exit code $exit_code"
+            # Simpan ringkasan error ke error.txt
+            echo "=== BUILD ERROR SUMMARY ===" > error.txt
+            tail -100 build.log >> error.txt
+            echo "Full log tersedia di build.log" >> error.txt
+          fi
+        continue-on-error: true
 
-      # ====== ARTIFACT ======
+      # ====== UPLOAD ERROR LOG JIKA GAGAL ======
+      - name: Upload error logs on failure
+        if: steps.kernel_build.outputs.exit_code != 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-error-log
+          path: |
+            build.log
+            error.txt
+
+      # ====== UPLOAD KONFIGURASI UNTUK DEBUG (opsional) ======
+      - name: Upload kernel config for debugging (if build fails)
+        if: steps.kernel_build.outputs.exit_code != 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-config-debug
+          path: ${OUT_DIR}/.config
+
+      # ====== ARTIFACT (hanya jika build sukses) ======
       - name: Collect artifacts
+        if: steps.kernel_build.outputs.exit_code == 0
         run: |
           mkdir -p artifacts
           cp ${OUT_DIR}/arch/arm64/boot/Image artifacts/ || true
@@ -201,8 +201,9 @@ jobs:
           cp ${OUT_DIR}/drivers/clk/qcom/clk-qcom.ko artifacts/ || true
           cp ${OUT_DIR}/drivers/soc/qcom/dcvs/qcom-dcvs.ko artifacts/ || true
 
-      - name: Upload artifacts
+      - name: Upload artifacts (successful build)
+        if: steps.kernel_build.outputs.exit_code == 0
         uses: actions/upload-artifact@v4
         with:
-          name: android14-gki-6.1
+          name: android14-gki-6.1.57
           path: artifacts
