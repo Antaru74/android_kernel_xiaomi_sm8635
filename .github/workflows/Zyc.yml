@@ -39,34 +39,46 @@ jobs:
           tar -xzf clang.tar.gz --strip-components=1
           rm clang.tar.gz
           
-          # Debug: lihat struktur folder
-          echo "Contents of bin directory:"
-          ls -la bin/ || echo "bin folder not found"
+          # Cek lokasi clang (bisa di root atau di bin)
+          if [ -f "bin/clang" ]; then
+            CLANG_DIR="bin"
+          elif [ -f "clang-16" ]; then
+            # Binary berada di root, pindahkan ke bin agar rapi
+            mkdir -p bin
+            mv clang* bin/ 2>/dev/null || true
+            mv ld.lld bin/ 2>/dev/null || true
+            mv llvm-* bin/ 2>/dev/null || true
+            mv lld bin/ 2>/dev/null || true
+            CLANG_DIR="bin"
+          elif [ -f "bin/clang-16" ]; then
+            CLANG_DIR="bin"
+          else
+            echo "ERROR: clang binary not found"
+            find . -name "clang*" -type f
+            exit 1
+          fi
           
-          # Cari binary clang (bisa bernama clang, clang-16, dll)
-          if [ ! -f "bin/clang" ]; then
-            if [ -f "bin/clang-16" ]; then
-              echo "Creating symlink clang -> clang-16"
-              ln -s clang-16 bin/clang
-            elif [ -f "bin/clang-16.0" ]; then
-              echo "Creating symlink clang -> clang-16.0"
-              ln -s clang-16.0 bin/clang
-            elif [ -f "bin/clang-17" ]; then
-              ln -s clang-17 bin/clang
-            else
-              echo "ERROR: clang binary not found. Searching..."
-              find . -name "clang*" -type f
-              exit 1
+          # Pastikan clang tersedia sebagai 'clang'
+          cd "${HOME}/toolchains/clang-zyc/${CLANG_DIR}"
+          if [ ! -f "clang" ]; then
+            if [ -f "clang-16" ]; then
+              ln -sf clang-16 clang
+            elif [ -f "clang-16.0" ]; then
+              ln -sf clang-16.0 clang
             fi
           fi
           
-          # Beri izin eksekusi pada semua binary
-          chmod +x bin/*
-          echo "${HOME}/toolchains/clang-zyc/bin" >> $GITHUB_PATH
+          # Beri izin eksekusi
+          chmod +x *
+          cd "${HOME}/toolchains/clang-zyc"
           
-          # Verifikasi clang dapat dijalankan
-          echo "Verifying clang:"
-          bin/clang --version || (echo "clang still not executable" && exit 1)
+          # Tampilkan struktur untuk debugging
+          echo "Final bin directory:"
+          ls -la bin/
+          echo "Clang version:"
+          bin/clang --version
+          
+          echo "${HOME}/toolchains/clang-zyc/bin" >> $GITHUB_PATH
 
       - name: Set environment variables
         run: |
