@@ -1,0 +1,111 @@
+name: Build Kernel Android 6.1
+
+on:
+  workflow_dispatch:   # Memungkinkan trigger manual
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (depth=1)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: 'recursive'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y git device-tree-compiler lz4 xz-utils zlib1g-dev \
+            openjdk-17-jdk gcc g++ python3 python-is-python3 p7zip-full \
+            android-sdk-libsparse-utils erofs-utils default-jdk git gnupg \
+            flex bison gperf build-essential zip curl libc6-dev libncurses-dev \
+            libx11-dev libreadline-dev libgl1-mesa-dev python3-make sudo bc \
+            grep tofrodos python3-markdown libxml2-utils xsltproc libtinfo6 \
+            cpio kmod openssl libelf-dev pahole libssl-dev libarchive-tools \
+            zstd rsync
+          # libtinfo5 untuk kompatibilitas (opsional)
+          wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb && \
+            sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
+
+      - name: Setup Neutron-Clang toolchain
+        run: |
+          mkdir -p "${HOME}/toolchains/neutron-clang"
+          cd "${HOME}/toolchains/neutron-clang"
+          curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
+          chmod +x antman
+          bash antman -S
+          bash antman --patch=glibc
+          echo "${HOME}/toolchains/neutron-clang/bin" >> $GITHUB_PATH
+
+      - name: Set environment variables
+        run: |
+          echo "KERNEL_ROOT=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_USER=@ravindu644" >> $GITHUB_ENV
+          echo "NEUTRON_PATH=${HOME}/toolchains/neutron-clang/bin" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=${HOME}/toolchains/neutron-clang/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Build kernel
+        id: build
+        run: |
+          export PATH="${HOME}/toolchains/neutron-clang/bin:${PATH}"
+          export BUILD_CC="${HOME}/toolchains/neutron-clang/bin/clang"
+          export KERNEL_ROOT="${GITHUB_WORKSPACE}"
+          export NEUTRON_PATH="${HOME}/toolchains/neutron-clang/bin"
+
+          BUILD_OPTIONS=(
+            -C "${KERNEL_ROOT}"
+            O="${KERNEL_ROOT}/out"
+            -j"$(nproc)"
+            ARCH=arm64
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CC="${BUILD_CC}"
+            LLVM=1
+            LLVM_IAS=1
+            AR="${NEUTRON_PATH}/llvm-ar"
+            NM="${NEUTRON_PATH}/llvm-nm"
+            LD="${NEUTRON_PATH}/ld.lld"
+            STRIP="${NEUTRON_PATH}/llvm-strip"
+            OBJCOPY="${NEUTRON_PATH}/llvm-objcopy"
+            OBJDUMP="${NEUTRON_PATH}/llvm-objdump"
+            READELF="${NEUTRON_PATH}/llvm-readelf"
+            HOSTCC="${NEUTRON_PATH}/clang"
+            HOSTCXX="${NEUTRON_PATH}/clang++"
+          )
+
+          mkdir -p "${KERNEL_ROOT}/out" "${KERNEL_ROOT}/build"
+
+          # Gunakan spearhead_defconfig
+          make "${BUILD_OPTIONS[@]}" spearhead_defconfig
+
+          # Build kernel image
+          make "${BUILD_OPTIONS[@]}" Image
+
+          # Jika build berhasil, set output
+          if [ -f "${KERNEL_ROOT}/out/arch/arm64/boot/Image" ]; then
+            echo "exit_code=0" >> $GITHUB_OUTPUT
+          else
+            echo "exit_code=1" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Collect artifacts (kernel image only)
+        if: steps.build.outputs.exit_code == 0
+        run: |
+          mkdir -p artifacts
+          cp out/arch/arm64/boot/Image artifacts/ || true
+          # Juga salin Image.lz4 jika ada
+          cp out/arch/arm64/boot/Image.lz4 artifacts/ || true
+
+      - name: Upload artifacts
+        if: steps.build.outputs.exit_code == 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image-spearhead
+          path: artifacts
