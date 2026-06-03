@@ -38,7 +38,35 @@ jobs:
           curl -L "https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260510-release/Clang-16.0.6-20260510.tar.gz" -o clang.tar.gz
           tar -xzf clang.tar.gz --strip-components=1
           rm clang.tar.gz
+          
+          # Debug: lihat struktur folder
+          echo "Contents of bin directory:"
+          ls -la bin/ || echo "bin folder not found"
+          
+          # Cari binary clang (bisa bernama clang, clang-16, dll)
+          if [ ! -f "bin/clang" ]; then
+            if [ -f "bin/clang-16" ]; then
+              echo "Creating symlink clang -> clang-16"
+              ln -s clang-16 bin/clang
+            elif [ -f "bin/clang-16.0" ]; then
+              echo "Creating symlink clang -> clang-16.0"
+              ln -s clang-16.0 bin/clang
+            elif [ -f "bin/clang-17" ]; then
+              ln -s clang-17 bin/clang
+            else
+              echo "ERROR: clang binary not found. Searching..."
+              find . -name "clang*" -type f
+              exit 1
+            fi
+          fi
+          
+          # Beri izin eksekusi pada semua binary
+          chmod +x bin/*
           echo "${HOME}/toolchains/clang-zyc/bin" >> $GITHUB_PATH
+          
+          # Verifikasi clang dapat dijalankan
+          echo "Verifying clang:"
+          bin/clang --version || (echo "clang still not executable" && exit 1)
 
       - name: Set environment variables
         run: |
@@ -46,7 +74,6 @@ jobs:
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "KBUILD_BUILD_USER=@ravindu644" >> $GITHUB_ENV
           echo "CLANG_ZYC_PATH=${HOME}/toolchains/clang-zyc/bin" >> $GITHUB_ENV
-          # Jika diperlukan library tambahan
           echo "LD_LIBRARY_PATH=${HOME}/toolchains/clang-zyc/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
 
       - name: Build kernel
