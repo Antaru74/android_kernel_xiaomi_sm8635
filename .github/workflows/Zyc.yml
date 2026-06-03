@@ -1,4 +1,4 @@
-name: Build Kernel Android 6.1 peridot
+name: Build Kernel Android 6.1
 
 on:
   workflow_dispatch:
@@ -39,40 +39,18 @@ jobs:
           tar -xzf clang.tar.gz --strip-components=1
           rm clang.tar.gz
           
-          # Cek lokasi clang (bisa di root atau di bin)
-          if [ -f "bin/clang" ]; then
-            CLANG_DIR="bin"
-          elif [ -f "clang-16" ]; then
-            # Binary berada di root, pindahkan ke bin agar rapi
-            mkdir -p bin
-            mv clang* bin/ 2>/dev/null || true
-            mv ld.lld bin/ 2>/dev/null || true
-            mv llvm-* bin/ 2>/dev/null || true
-            mv lld bin/ 2>/dev/null || true
-            CLANG_DIR="bin"
-          elif [ -f "bin/clang-16" ]; then
-            CLANG_DIR="bin"
-          else
-            echo "ERROR: clang binary not found"
-            find . -name "clang*" -type f
-            exit 1
+          # Hapus direktori 'clang' yang mengganggu (bukan binary)
+          rm -rf bin/clang 2>/dev/null || true
+          
+          # Buat symlink clang -> clang-16 jika diperlukan
+          cd bin
+          if [ ! -f "clang" ] && [ -f "clang-16" ]; then
+            ln -sf clang-16 clang
           fi
+          cd ..
           
-          # Pastikan clang tersedia sebagai 'clang'
-          cd "${HOME}/toolchains/clang-zyc/${CLANG_DIR}"
-          if [ ! -f "clang" ]; then
-            if [ -f "clang-16" ]; then
-              ln -sf clang-16 clang
-            elif [ -f "clang-16.0" ]; then
-              ln -sf clang-16.0 clang
-            fi
-          fi
+          chmod +x bin/*
           
-          # Beri izin eksekusi
-          chmod +x *
-          cd "${HOME}/toolchains/clang-zyc"
-          
-          # Tampilkan struktur untuk debugging
           echo "Final bin directory:"
           ls -la bin/
           echo "Clang version:"
