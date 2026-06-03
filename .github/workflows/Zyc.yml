@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [ main, master ]
 
+env:
+  ZYC_URL: "https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260510-release/Clang-16.0.6-20260510.tar.gz"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,46 +36,30 @@ jobs:
 
       - name: Setup Clang ZyC toolchain
         run: |
-          mkdir -p "${HOME}/toolchains/clang-zyc"
-          cd "${HOME}/toolchains/clang-zyc"
-          curl -L "https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260510-release/Clang-16.0.6-20260510.tar.gz" -o clang.tar.gz
-          tar -xzf clang.tar.gz --strip-components=1
-          rm clang.tar.gz
-          
-          # Hapus direktori 'clang' yang mengganggu (bukan binary)
-          rm -rf bin/clang 2>/dev/null || true
-          
-          # Buat symlink clang -> clang-16 jika diperlukan
-          cd bin
-          if [ ! -f "clang" ] && [ -f "clang-16" ]; then
-            ln -sf clang-16 clang
-          fi
-          cd ..
-          
-          chmod +x bin/*
-          
-          echo "Final bin directory:"
-          ls -la bin/
-          echo "Clang version:"
-          bin/clang --version
-          
-          echo "${HOME}/toolchains/clang-zyc/bin" >> $GITHUB_PATH
+          mkdir -p $HOME/toolchains
+          cd $HOME/toolchains
+          curl -L -o zyc-clang.tar.gz "${{ env.ZYC_URL }}"
+          tar -xzf zyc-clang.tar.gz
+          rm zyc-clang.tar.gz
+          CLANG_DIR=$(ls -d Clang-* | head -n1)
+          echo "PATH=$HOME/toolchains/$CLANG_DIR/bin:$PATH" >> $GITHUB_ENV
+          echo "CC=$HOME/toolchains/$CLANG_DIR/bin/clang" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
 
       - name: Set environment variables
         run: |
           echo "KERNEL_ROOT=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "KBUILD_BUILD_USER=@ravindu644" >> $GITHUB_ENV
-          echo "CLANG_ZYC_PATH=${HOME}/toolchains/clang-zyc/bin" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=${HOME}/toolchains/clang-zyc/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=${HOME}/toolchains/Clang-*/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
 
       - name: Build kernel
         id: build
         run: |
-          export PATH="${HOME}/toolchains/clang-zyc/bin:${PATH}"
-          export BUILD_CC="${HOME}/toolchains/clang-zyc/bin/clang"
           export KERNEL_ROOT="${GITHUB_WORKSPACE}"
-          export CLANG_ZYC_PATH="${HOME}/toolchains/clang-zyc/bin"
+          export PATH="${HOME}/toolchains/$(ls -d ${HOME}/toolchains/Clang-* | head -n1)/bin:${PATH}"
+          export CC="${HOME}/toolchains/$(ls -d ${HOME}/toolchains/Clang-* | head -n1)/bin/clang"
 
           BUILD_OPTIONS=(
             -C "${KERNEL_ROOT}"
@@ -81,18 +68,18 @@ jobs:
             ARCH=arm64
             CROSS_COMPILE=aarch64-linux-gnu-
             CLANG_TRIPLE=aarch64-linux-gnu-
-            CC="${BUILD_CC}"
+            CC="${CC}"
             LLVM=1
             LLVM_IAS=1
-            AR="${CLANG_ZYC_PATH}/llvm-ar"
-            NM="${CLANG_ZYC_PATH}/llvm-nm"
-            LD="${CLANG_ZYC_PATH}/ld.lld"
-            STRIP="${CLANG_ZYC_PATH}/llvm-strip"
-            OBJCOPY="${CLANG_ZYC_PATH}/llvm-objcopy"
-            OBJDUMP="${CLANG_ZYC_PATH}/llvm-objdump"
-            READELF="${CLANG_ZYC_PATH}/llvm-readelf"
-            HOSTCC="${CLANG_ZYC_PATH}/clang"
-            HOSTCXX="${CLANG_ZYC_PATH}/clang++"
+            AR="$(dirname ${CC})/llvm-ar"
+            NM="$(dirname ${CC})/llvm-nm"
+            LD="$(dirname ${CC})/ld.lld"
+            STRIP="$(dirname ${CC})/llvm-strip"
+            OBJCOPY="$(dirname ${CC})/llvm-objcopy"
+            OBJDUMP="$(dirname ${CC})/llvm-objdump"
+            READELF="$(dirname ${CC})/llvm-readelf"
+            HOSTCC="${CC}"
+            HOSTCXX="${CC}++"
           )
 
           mkdir -p "${KERNEL_ROOT}/out" "${KERNEL_ROOT}/build"
