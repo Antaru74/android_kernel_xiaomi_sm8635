@@ -86,29 +86,18 @@ jobs:
       - name: Generate kernel config with spearhead_defconfig
         run: |
           mkdir -p ${{ env.OUT_DIR }}
-          # Gunakan spearhead_defconfig murni (tanpa merge)
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} spearhead_defconfig
-          # Resolve dependencies
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} olddefconfig
 
       # ====== BUILD KERNEL ======
       - name: Build kernel
         id: build
         run: |
-          export CLANG_OPT_LDFLAGS=(
-            "-Wl,-O3"
-            "-Wl,--lto-O3"
-            "-Wl,--sort-common"
-            "-Wl,--as-needed"
-          )
-          LDFLAGS_COMBINED=$(printf " %s" "${CLANG_OPT_LDFLAGS[@]}")
-
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} -j$(nproc) \
             CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
             STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
             READELF=llvm-readelf LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
-            LDFLAGS="$LDFLAGS_COMBINED" \
             2>&1 | tee build.log
           exit_code=${PIPESTATUS[0]}
           echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
