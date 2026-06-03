@@ -82,19 +82,13 @@ jobs:
           echo "LLVM=1" >> $GITHUB_ENV
           echo "LLVM_IAS=1" >> $GITHUB_ENV
 
-      # ====== REMOVE O3 OPTIMIZATION BLOKS (i'm sleepy) ======
-      - name: Drop CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3 from Makefile
-        run: |
-          sed -i '/ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3/,/endif/d' Makefile
-          sed -i 's/ -O3/ -O2/g' Makefile
-
       # ====== KERNEL CONFIGURATION ======
       - name: Generate kernel config with vendor fragment
         run: |
           mkdir -p ${{ env.OUT_DIR }}
-          # 1. Start with GKI defconfig
-          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} gki_defconfig
-          # 2. Merge vendor fragment if present
+          # 1. Start dengan spearhead_defconfig (bukan gki_defconfig)
+          make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} spearhead_defconfig
+          # 2. Merge vendor fragment jika ada
           if [ -f arch/arm64/configs/vendor/peridot_GKI.config ]; then
             scripts/kconfig/merge_config.sh -m -O ${{ env.OUT_DIR }} \
               ${{ env.OUT_DIR }}/.config arch/arm64/configs/vendor/peridot_GKI.config
@@ -102,29 +96,18 @@ jobs:
           # 3. Disable problematic mtdoops (missing symbol pwrkey_irq_notifier_list)
           sed -i '/CONFIG_MTD_OOPS/d' ${{ env.OUT_DIR }}/.config
           echo "# CONFIG_MTD_OOPS is not set" >> ${{ env.OUT_DIR }}/.config
-          # 4. Remove any remaining O3 config
-          sed -i '/CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3/d' ${{ env.OUT_DIR }}/.config
-          # 5. Resolve dependencies
+          # 4. Resolve dependencies
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} olddefconfig
 
       # ====== BUILD KERNEL ======
       - name: Build kernel
         id: build
         run: |
-          export CLANG_OPT_LDFLAGS=(
-            "-Wl,-O3"
-            "-Wl,--lto-O3"
-            "-Wl,--sort-common"
-            "-Wl,--as-needed"
-          )
-          LDFLAGS_COMBINED=$(printf " %s" "${CLANG_OPT_LDFLAGS[@]}")
-
           make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} -j$(nproc) \
             CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
             STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
             READELF=llvm-readelf LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
-            LDFLAGS="$LDFLAGS_COMBINED" \
             2>&1 | tee build.log
           exit_code=${PIPESTATUS[0]}
           echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
