@@ -1,0 +1,117 @@
+name: Build Kernel Android 6.1 with LLVM 22
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  LLVM_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.2/LLVM-22.1.2-Linux-X64.tar.xz"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (depth=1)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: 'recursive'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y git device-tree-compiler lz4 xz-utils zlib1g-dev \
+            openjdk-17-jdk gcc g++ python3 python-is-python3 p7zip-full \
+            android-sdk-libsparse-utils erofs-utils default-jdk gnupg \
+            flex bison gperf build-essential zip curl libc6-dev libncurses-dev \
+            libx11-dev libreadline-dev libgl1-mesa-dev sudo bc \
+            grep tofrodos python3-markdown libxml2-utils xsltproc libtinfo6 \
+            cpio kmod openssl libelf-dev pahole libssl-dev libarchive-tools \
+            zstd rsync
+          # libtinfo5 untuk kompatibilitas (jika diperlukan)
+          wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb && \
+            sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
+
+      - name: Setup LLVM 22.1.2 toolchain
+        run: |
+          mkdir -p $HOME/toolchains
+          cd $HOME/toolchains
+          curl -L -o llvm.tar.xz "${{ env.LLVM_URL }}"
+          tar -xf llvm.tar.xz
+          rm llvm.tar.xz
+          # Direktori hasil ekstraksi: LLVM-22.1.2-Linux-X64
+          CLANG_DIR=$(ls -d LLVM-* | head -n1)
+          echo "PATH=$HOME/toolchains/$CLANG_DIR/bin:$PATH" >> $GITHUB_ENV
+          echo "CC=$HOME/toolchains/$CLANG_DIR/bin/clang" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          # Verifikasi
+          $HOME/toolchains/$CLANG_DIR/bin/clang --version
+
+      - name: Set environment variables
+        run: |
+          echo "KERNEL_ROOT=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_USER=@ravindu644" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=${HOME}/toolchains/LLVM-*/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Build kernel
+        id: build
+        run: |
+          export KERNEL_ROOT="${GITHUB_WORKSPACE}"
+          export LLVM_BIN="$HOME/toolchains/$(ls -d $HOME/toolchains/LLVM-* | head -n1)/bin"
+          export PATH="${LLVM_BIN}:${PATH}"
+          export CC="${LLVM_BIN}/clang"
+
+          BUILD_OPTIONS=(
+            -C "${KERNEL_ROOT}"
+            O="${KERNEL_ROOT}/out"
+            -j"$(nproc)"
+            ARCH=arm64
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CC="${CC}"
+            LLVM=1
+            LLVM_IAS=1
+            AR="${LLVM_BIN}/llvm-ar"
+            NM="${LLVM_BIN}/llvm-nm"
+            LD="${LLVM_BIN}/ld.lld"
+            STRIP="${LLVM_BIN}/llvm-strip"
+            OBJCOPY="${LLVM_BIN}/llvm-objcopy"
+            OBJDUMP="${LLVM_BIN}/llvm-objdump"
+            READELF="${LLVM_BIN}/llvm-readelf"
+            HOSTCC="${CC}"
+            HOSTCXX="${CC}++"
+          )
+
+          mkdir -p "${KERNEL_ROOT}/out" "${KERNEL_ROOT}/build"
+
+          # Konfigurasi dengan spearhead_defconfig (pastikan file ada)
+          make "${BUILD_OPTIONS[@]}" spearhead_defconfig
+
+          # Bangun kernel image
+          make "${BUILD_OPTIONS[@]}" Image
+
+          if [ -f "${KERNEL_ROOT}/out/arch/arm64/boot/Image" ]; then
+            echo "exit_code=0" >> $GITHUB_OUTPUT
+          else
+            echo "exit_code=1" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Collect artifacts (kernel image only)
+        if: steps.build.outputs.exit_code == 0
+        run: |
+          mkdir -p artifacts
+          cp out/arch/arm64/boot/Image artifacts/ || true
+          cp out/arch/arm64/boot/Image.lz4 artifacts/ || true
+
+      - name: Upload artifacts
+        if: steps.build.outputs.exit_code == 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image-spearhead-llvm22
+          path: artifacts
