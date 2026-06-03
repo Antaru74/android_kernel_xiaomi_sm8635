@@ -1,4 +1,4 @@
-name: Build Kernel Android 6.1
+name: Build Kernel Android 6.1 peridot
 
 on:
   workflow_dispatch:
