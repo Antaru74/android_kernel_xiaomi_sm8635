@@ -1,0 +1,105 @@
+name: Build Kernel Android 6.1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (depth=1)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: 'recursive'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y git device-tree-compiler lz4 xz-utils zlib1g-dev \
+            openjdk-17-jdk gcc g++ python3 python-is-python3 p7zip-full \
+            android-sdk-libsparse-utils erofs-utils default-jdk gnupg \
+            flex bison gperf build-essential zip curl libc6-dev libncurses-dev \
+            libx11-dev libreadline-dev libgl1-mesa-dev sudo bc \
+            grep tofrodos python3-markdown libxml2-utils xsltproc libtinfo6 \
+            cpio kmod openssl libelf-dev pahole libssl-dev libarchive-tools \
+            zstd rsync
+          wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb && \
+            sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
+
+      - name: Setup Clang ZyC toolchain
+        run: |
+          mkdir -p "${HOME}/toolchains/clang-zyc"
+          cd "${HOME}/toolchains/clang-zyc"
+          curl -L "https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260510-release/Clang-16.0.6-20260510.tar.gz" -o clang.tar.gz
+          tar -xzf clang.tar.gz --strip-components=1
+          rm clang.tar.gz
+          echo "${HOME}/toolchains/clang-zyc/bin" >> $GITHUB_PATH
+
+      - name: Set environment variables
+        run: |
+          echo "KERNEL_ROOT=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_USER=@ravindu644" >> $GITHUB_ENV
+          echo "CLANG_ZYC_PATH=${HOME}/toolchains/clang-zyc/bin" >> $GITHUB_ENV
+          # Jika diperlukan library tambahan
+          echo "LD_LIBRARY_PATH=${HOME}/toolchains/clang-zyc/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Build kernel
+        id: build
+        run: |
+          export PATH="${HOME}/toolchains/clang-zyc/bin:${PATH}"
+          export BUILD_CC="${HOME}/toolchains/clang-zyc/bin/clang"
+          export KERNEL_ROOT="${GITHUB_WORKSPACE}"
+          export CLANG_ZYC_PATH="${HOME}/toolchains/clang-zyc/bin"
+
+          BUILD_OPTIONS=(
+            -C "${KERNEL_ROOT}"
+            O="${KERNEL_ROOT}/out"
+            -j"$(nproc)"
+            ARCH=arm64
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CC="${BUILD_CC}"
+            LLVM=1
+            LLVM_IAS=1
+            AR="${CLANG_ZYC_PATH}/llvm-ar"
+            NM="${CLANG_ZYC_PATH}/llvm-nm"
+            LD="${CLANG_ZYC_PATH}/ld.lld"
+            STRIP="${CLANG_ZYC_PATH}/llvm-strip"
+            OBJCOPY="${CLANG_ZYC_PATH}/llvm-objcopy"
+            OBJDUMP="${CLANG_ZYC_PATH}/llvm-objdump"
+            READELF="${CLANG_ZYC_PATH}/llvm-readelf"
+            HOSTCC="${CLANG_ZYC_PATH}/clang"
+            HOSTCXX="${CLANG_ZYC_PATH}/clang++"
+          )
+
+          mkdir -p "${KERNEL_ROOT}/out" "${KERNEL_ROOT}/build"
+
+          make "${BUILD_OPTIONS[@]}" spearhead_defconfig
+          make "${BUILD_OPTIONS[@]}" Image
+
+          if [ -f "${KERNEL_ROOT}/out/arch/arm64/boot/Image" ]; then
+            echo "exit_code=0" >> $GITHUB_OUTPUT
+          else
+            echo "exit_code=1" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Collect artifacts (kernel image only)
+        if: steps.build.outputs.exit_code == 0
+        run: |
+          mkdir -p artifacts
+          cp out/arch/arm64/boot/Image artifacts/ || true
+          cp out/arch/arm64/boot/Image.lz4 artifacts/ || true
+
+      - name: Upload artifacts
+        if: steps.build.outputs.exit_code == 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image-spearhead
+          path: artifacts
